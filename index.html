@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>杨氏双缝干涉 装置+干涉谱 交互式动画</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background: #f0f0f0;
+    padding: 20px;
+}
+.container {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+.control-panel {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 0 8px #ccc;
+    width: 280px;
+}
+canvas {
+    background: #f8f8f8;
+    border-radius: 8px;
+    box-shadow: 0 0 8px #999;
+}
+.slide-item {
+    margin: 15px 0;
+}
+label {
+    display: block;
+    margin-bottom: 5px;
+}
+input[type="range"] {
+    width: 100%;
+}
+.value-text {
+    color: #222;
+    font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="control-panel">
+        <h3>参数调节</h3>
+        <div class="slide-item">
+            <label>波长 (nm)：<span class="value-text" id="lamVal">650</span></label>
+            <input type="range" id="lambda" min="380" max="760" value="650">
+            <small>380(紫) ~ 760(红)</small>
+        </div>
+        <div class="slide-item">
+            <label>双缝间距 d (mm)：<span class="value-text" id="dVal">0.20</span></label>
+            <input type="range" id="d" min="0.1" max="0.8" step="0.01" value="0.20">
+        </div>
+        <div class="slide-item">
+            <label>屏到狭缝距离 L (cm)：<span class="value-text" id="LVal">80</span></label>
+            <input type="range" id="L" min="40" max="150" value="80">
+        </div>
+        <p>公式：亮纹位置 x = k·λL / d</p>
+    </div>
+
+    <canvas id="interfCanvas" width="900" height="600"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('interfCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// 控制器
+const lambdaSlider = document.getElementById('lambda');
+const dSlider = document.getElementById('d');
+const LSlider = document.getElementById('L');
+const lamVal = document.getElementById('lamVal');
+const dVal = document.getElementById('dVal');
+const LVal = document.getElementById('LVal');
+
+// 物理参数
+let lambda_nm = 650;
+let d_mm = 0.2;
+let L_cm = 80;
+
+// 波长转RGB
+function wavelengthToRGB(wl) {
+    let r = 0, g = 0, b = 0;
+    if (wl >= 380 && wl < 440) {
+        r = -(wl - 440) / (440 - 380); g = 0; b = 1;
+    } else if (wl >= 440 && wl < 490) {
+        r = 0; g = (wl - 440) / (490 - 440); b = 1;
+    } else if (wl >= 490 && wl < 510) {
+        r = 0; g = 1; b = -(wl - 510) / (510 - 490);
+    } else if (wl >= 510 && wl < 580) {
+        r = (wl - 510) / (580 - 510); g = 1; b = 0;
+    } else if (wl >= 580 && wl < 645) {
+        r = 1; g = -(wl - 645) / (645 - 580); b = 0;
+    } else if (wl >= 645 && wl <= 760) {
+        r = 1; g = 0; b = 0;
+    }
+    let factor = 1;
+    if (wl > 700) factor = 0.3 + 0.7 * (760 - wl) / 60;
+    if (wl < 420) factor = 0.3 + 0.7 * (wl - 380) / 40;
+    r = Math.round(255 * r * factor);
+    g = Math.round(255 * g * factor);
+    b = Math.round(255 * b * factor);
+    return {r, g, b};
+}
+
+// 绘制整套光学装置 + 匹配亮纹的光路
+function drawSetup(color) {
+    const setupX = 50;
+    const centerY = H / 2;
+
+    // 入射平行光
+    ctx.strokeStyle = `rgba(${color.r},${color.g},${color.b},0.7)`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+        const y = centerY - 80 + i * 35;
+        ctx.beginPath();
+        ctx.moveTo(setupX, y);
+        ctx.lineTo(setupX + 80, y);
+        ctx.stroke();
+        // 箭头
+        ctx.beginPath();
+        ctx.moveTo(setupX + 70, y - 5);
+        ctx.lineTo(setupX + 80, y);
+        ctx.lineTo(setupX + 70, y + 5);
+        ctx.stroke();
+    }
+
+    // 单缝挡板
+    ctx.fillStyle = '#999';
+    ctx.fillRect(setupX + 90, centerY - 100, 8, 200);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(setupX + 90, centerY - 10, 8, 20);
+
+    const slit1X = setupX + 200;
+    const slit2YOffset = d_mm * 100;
+    const S1Y = centerY - slit2YOffset;
+    const S2Y = centerY + slit2YOffset;
+
+    // 单缝到双缝发散光
+    ctx.beginPath();
+    ctx.moveTo(setupX + 100, centerY);
+    ctx.lineTo(slit1X, S1Y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(setupX + 100, centerY);
+    ctx.lineTo(slit1X, S2Y);
+    ctx.stroke();
+
+    // 双缝挡板 + S1 S2标注
+    ctx.fillStyle = '#999';
+    ctx.fillRect(slit1X - 4, centerY - 120, 8, 240);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(slit1X - 4, S1Y - 4, 8, 8);
+    ctx.fillRect(slit1X - 4, S2Y - 4, 8, 8);
+    ctx.fillStyle = '#000';
+    ctx.font = '20px Arial';
+    ctx.fillText('S₁', slit1X - 30, S1Y + 5);
+    ctx.fillText('S₂', slit1X - 30, S2Y + 5);
+
+    // 接收屏位置
+    const L_pixels = L_cm * 3;
+    const screenX = slit1X + L_pixels;
+    ctx.fillStyle = '#777';
+    ctx.fillRect(screenX, centerY - 150, 8, 300);
+    ctx.fillStyle = '#000';
+    ctx.fillText('P', screenX + 10, centerY - 140);
+
+    // ========== 核心修正：按亮纹公式自动画汇聚光线，不再固定5条 ==========
+    const λ = lambda_nm * 1e-9;
+    const d = d_mm * 1e-3;
+    const L = L_cm * 1e-2;
+    const scaleStripe = 25000; // 条纹放大10倍，稀疏清晰
+    const maxOrder = 3; // 最多显示±3级亮纹
+
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = `rgba(${color.r},${color.g},${color.b},0.85)`;
+    for (let k = -maxOrder; k <= maxOrder; k++) {
+        // 亮纹理论位置 x = kλL/d
+        const x_k = k * λ * L / d;
+        // 映射到画布Y坐标
+        const yScreen = centerY + x_k * scaleStripe;
+        // 只绘制屏幕可视范围内的亮纹
+        if (yScreen < centerY - 140 || yScreen > centerY + 140) continue;
+        // S1、S2 分别到该亮纹的两条光线
+        ctx.beginPath();
+        ctx.moveTo(slit1X, S1Y);
+        ctx.lineTo(screenX, yScreen);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(slit1X, S2Y);
+        ctx.lineTo(screenX, yScreen);
+        ctx.stroke();
+    }
+
+    // 标注缝到屏距离 L
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = '#a0a';
+    ctx.beginPath();
+    ctx.moveTo(slit1X, centerY + 160);
+    ctx.lineTo(screenX, centerY + 160);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(slit1X, centerY + 150);
+    ctx.lineTo(slit1X, centerY + 170);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(screenX, centerY + 150);
+    ctx.lineTo(screenX, centerY + 170);
+    ctx.stroke();
+    ctx.fillStyle = '#a0a';
+    ctx.font = '24px serif';
+    ctx.fillText("L", (slit1X + screenX) / 2 - 10, centerY + 185);
+    ctx.setLineDash([]);
+
+    return {screenX, centerY, scaleStripe};
+}
+
+// 绘制右侧干涉条纹屏
+function drawInterference(color, screenX, centerY, scaleStripe) {
+    const λ = lambda_nm * 1e-9;
+    const d = d_mm * 1e-3;
+    const L = L_cm * 1e-2;
+
+    const stripeWidth = 150;
+    const startX = screenX + 20;
+    // 黑色背景模拟光屏
+    ctx.fillStyle = '#000';
+    ctx.fillRect(startX, centerY - 150, stripeWidth, 300);
+
+    // 逐行渲染光强分布
+    for (let y = 0; y < 300; y++) {
+        const pos = (y - 150) / scaleStripe;
+        const phase = Math.PI * d * pos / (λ * L);
+        const intensity = Math.cos(phase) ** 2;
+        const r = Math.round(color.r * intensity);
+        const g = Math.round(color.g * intensity);
+        const b = Math.round(color.b * intensity);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(startX, centerY - 150 + y, stripeWidth, 1);
+    }
+}
+
+// 总渲染
+function draw() {
+    lamVal.innerText = lambda_nm;
+    dVal.innerText = d_mm.toFixed(2);
+    LVal.innerText = L_cm;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, W, H);
+    const color = wavelengthToRGB(lambda_nm);
+    const {screenX, centerY, scaleStripe} = drawSetup(color);
+    drawInterference(color, screenX, centerY, scaleStripe);
+}
+
+// 滑块监听
+function updateParams() {
+    lambda_nm = Number(lambdaSlider.value);
+    d_mm = Number(dSlider.value);
+    L_cm = Number(LSlider.value);
+    draw();
+}
+lambdaSlider.addEventListener('input', updateParams);
+dSlider.addEventListener('input', updateParams);
+LSlider.addEventListener('input', updateParams);
+
+draw();
+</script>
+</body>
+</html>
