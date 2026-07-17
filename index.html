@@ -8,6 +8,7 @@ body {
     font-family: Arial, sans-serif;
     background: #f0f0f0;
     padding: 20px;
+    margin: 0;
 }
 .container {
     display: flex;
@@ -20,6 +21,26 @@ body {
     border-radius: 8px;
     box-shadow: 0 0 8px #ccc;
     width: 280px;
+    position: relative;
+}
+/* 退出按钮：放大，放标题右侧 */
+.header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom:10px;
+}
+.exit-btn {
+    padding: 4px 12px;
+    background: #dd3333;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size:14px;
+    cursor: pointer;
+}
+.exit-btn:hover {
+    background: #bb2222;
 }
 canvas {
     background: #f8f8f8;
@@ -40,12 +61,21 @@ input[type="range"] {
     color: #222;
     font-weight: bold;
 }
+.formula-text {
+    font-size: 14px;
+    line-height: 1.6;
+    margin-top:8px;
+}
 </style>
 </head>
 <body>
 <div class="container">
     <div class="control-panel">
-        <h3>参数调节</h3>
+        <!-- 需求1：标题+右侧大退出按钮 -->
+        <div class="header-row">
+            <h3 style="margin:0;">参数调节</h3>
+            <button class="exit-btn" id="exitBtn">退出</button>
+        </div>
         <div class="slide-item">
             <label>波长 (nm)：<span class="value-text" id="lamVal">650</span></label>
             <input type="range" id="lambda" min="380" max="760" value="650">
@@ -56,10 +86,14 @@ input[type="range"] {
             <input type="range" id="d" min="0.1" max="0.8" step="0.01" value="0.20">
         </div>
         <div class="slide-item">
-            <label>屏到狭缝距离 L (cm)：<span class="value-text" id="LVal">80</span></label>
-            <input type="range" id="L" min="40" max="150" value="80">
+            <label>屏到狭缝距离 D (cm)：<span class="value-text" id="DVal">80</span></label>
+            <input type="range" id="D" min="40" max="150" value="80">
         </div>
-        <p>公式：亮纹位置 x = k·λL / d</p>
+        <!-- 仅保留亮条纹公式 -->
+        <div class="formula-text">
+            <strong>亮条纹坐标（k级）：</strong><br>
+            x<sub>k</sub> = k·λD / d &nbsp;&nbsp;k=0,±1,±2…
+        </div>
     </div>
 
     <canvas id="interfCanvas" width="900" height="600"></canvas>
@@ -74,15 +108,21 @@ const H = canvas.height;
 // 控制器
 const lambdaSlider = document.getElementById('lambda');
 const dSlider = document.getElementById('d');
-const LSlider = document.getElementById('L');
+const DSlider = document.getElementById('D');
 const lamVal = document.getElementById('lamVal');
 const dVal = document.getElementById('dVal');
-const LVal = document.getElementById('LVal');
+const DVal = document.getElementById('DVal');
+const exitBtn = document.getElementById('exitBtn');
+
+// 退出按钮功能
+exitBtn.addEventListener('click', ()=>{
+    window.close();
+});
 
 // 物理参数
 let lambda_nm = 650;
 let d_mm = 0.2;
-let L_cm = 80;
+let D_cm = 80;
 
 // 波长转RGB
 function wavelengthToRGB(wl) {
@@ -109,7 +149,7 @@ function wavelengthToRGB(wl) {
     return {r, g, b};
 }
 
-// 绘制整套光学装置 + 匹配亮纹的光路
+// 绘制整套光学装置 + 匹配亮纹光路
 function drawSetup(color) {
     const setupX = 50;
     const centerY = H / 2;
@@ -131,11 +171,12 @@ function drawSetup(color) {
         ctx.stroke();
     }
 
-    // 单缝挡板
+    // ========== 修改1：单缝缝宽缩小至与双缝一致（8像素） ==========
     ctx.fillStyle = '#999';
     ctx.fillRect(setupX + 90, centerY - 100, 8, 200);
     ctx.fillStyle = '#fff';
-    ctx.fillRect(setupX + 90, centerY - 10, 8, 20);
+    // 原20高度改为8，和双缝缝宽相同
+    ctx.fillRect(setupX + 90, centerY - 4, 8, 8);
 
     const slit1X = setupX + 200;
     const slit2YOffset = d_mm * 100;
@@ -164,30 +205,26 @@ function drawSetup(color) {
     ctx.fillText('S₂', slit1X - 30, S2Y + 5);
 
     // 接收屏位置
-    const L_pixels = L_cm * 3;
-    const screenX = slit1X + L_pixels;
+    const D_pixels = D_cm * 3;
+    const screenX = slit1X + D_pixels;
     ctx.fillStyle = '#777';
     ctx.fillRect(screenX, centerY - 150, 8, 300);
-    ctx.fillStyle = '#000';
-    ctx.fillText('P', screenX + 10, centerY - 140);
+    // ========== 修改2：删除屏幕旁字母P，注释掉这行 ==========
+    // ctx.fillText('P', screenX + 10, centerY - 140);
 
-    // ========== 核心修正：按亮纹公式自动画汇聚光线，不再固定5条 ==========
+    // 物理常量
     const λ = lambda_nm * 1e-9;
     const d = d_mm * 1e-3;
-    const L = L_cm * 1e-2;
+    const D = D_cm * 1e-2;
     const scaleStripe = 25000; // 条纹放大10倍，稀疏清晰
-    const maxOrder = 3; // 最多显示±3级亮纹
 
+    // 遍历大范围k，自动过滤屏幕外条纹
     ctx.lineWidth = 1.6;
     ctx.strokeStyle = `rgba(${color.r},${color.g},${color.b},0.85)`;
-    for (let k = -maxOrder; k <= maxOrder; k++) {
-        // 亮纹理论位置 x = kλL/d
-        const x_k = k * λ * L / d;
-        // 映射到画布Y坐标
+    for (let k = -10; k <= 10; k++) {
+        const x_k = k * λ * D / d;
         const yScreen = centerY + x_k * scaleStripe;
-        // 只绘制屏幕可视范围内的亮纹
         if (yScreen < centerY - 140 || yScreen > centerY + 140) continue;
-        // S1、S2 分别到该亮纹的两条光线
         ctx.beginPath();
         ctx.moveTo(slit1X, S1Y);
         ctx.lineTo(screenX, yScreen);
@@ -198,7 +235,7 @@ function drawSetup(color) {
         ctx.stroke();
     }
 
-    // 标注缝到屏距离 L
+    // 标注缝到屏距离 D
     ctx.setLineDash([5, 5]);
     ctx.strokeStyle = '#a0a';
     ctx.beginPath();
@@ -215,28 +252,25 @@ function drawSetup(color) {
     ctx.stroke();
     ctx.fillStyle = '#a0a';
     ctx.font = '24px serif';
-    ctx.fillText("L", (slit1X + screenX) / 2 - 10, centerY + 185);
+    ctx.fillText("D", (slit1X + screenX) / 2 - 10, centerY + 185);
     ctx.setLineDash([]);
 
-    return {screenX, centerY, scaleStripe};
+    return {screenX, centerY, scaleStripe, λ, d, D};
 }
 
-// 绘制右侧干涉条纹屏
-function drawInterference(color, screenX, centerY, scaleStripe) {
-    const λ = lambda_nm * 1e-9;
-    const d = d_mm * 1e-3;
-    const L = L_cm * 1e-2;
-
+// 绘制右侧干涉条纹屏：自动显示所有屏幕内亮纹级次，无3级上限
+function drawInterference(color, screenX, centerY, scaleStripe, λ, d, D) {
     const stripeWidth = 150;
     const startX = screenX + 20;
-    // 黑色背景模拟光屏
+    const textX = startX + stripeWidth + 8;
+    // 黑色光屏背景
     ctx.fillStyle = '#000';
     ctx.fillRect(startX, centerY - 150, stripeWidth, 300);
 
-    // 逐行渲染光强分布
+    // 渲染光强条纹
     for (let y = 0; y < 300; y++) {
         const pos = (y - 150) / scaleStripe;
-        const phase = Math.PI * d * pos / (λ * L);
+        const phase = Math.PI * d * pos / (λ * D);
         const intensity = Math.cos(phase) ** 2;
         const r = Math.round(color.r * intensity);
         const g = Math.round(color.g * intensity);
@@ -244,30 +278,40 @@ function drawInterference(color, screenX, centerY, scaleStripe) {
         ctx.fillStyle = `rgb(${r},${g},${b})`;
         ctx.fillRect(startX, centerY - 150 + y, stripeWidth, 1);
     }
+
+    // 遍历大范围k，屏幕内能放下几条就显示几条级次数字
+    ctx.font = '18px Arial';
+    ctx.fillStyle = `rgb(${color.r},${color.g},${color.b})`;
+    for (let k = -10; k <= 10; k++) {
+        const x_k = k * λ * D / d;
+        const yPos = centerY + x_k * scaleStripe;
+        if (yPos < centerY - 140 || yPos > centerY + 140) continue;
+        ctx.fillText(`${k}`, textX, yPos + 6);
+    }
 }
 
 // 总渲染
 function draw() {
     lamVal.innerText = lambda_nm;
     dVal.innerText = d_mm.toFixed(2);
-    LVal.innerText = L_cm;
+    DVal.innerText = D_cm;
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, W, H);
     const color = wavelengthToRGB(lambda_nm);
-    const {screenX, centerY, scaleStripe} = drawSetup(color);
-    drawInterference(color, screenX, centerY, scaleStripe);
+    const params = drawSetup(color);
+    drawInterference(color, params.screenX, params.centerY, params.scaleStripe, params.λ, params.d, params.D);
 }
 
 // 滑块监听
 function updateParams() {
     lambda_nm = Number(lambdaSlider.value);
     d_mm = Number(dSlider.value);
-    L_cm = Number(LSlider.value);
+    D_cm = Number(DSlider.value);
     draw();
 }
 lambdaSlider.addEventListener('input', updateParams);
 dSlider.addEventListener('input', updateParams);
-LSlider.addEventListener('input', updateParams);
+DSlider.addEventListener('input', updateParams);
 
 draw();
 </script>
